@@ -6,6 +6,9 @@ Package.resolved
 # Packaged app bundle (produced by build.sh)
 *.app/
 
+# Release artifacts (zipped app uploaded to GitHub Releases)
+FreeMic-*.zip
+
 # macOS
 .DS_Store
 

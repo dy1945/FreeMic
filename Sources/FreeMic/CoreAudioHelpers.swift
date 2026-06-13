@@ -127,10 +127,11 @@ func ca_isRunningSomewhere(_ id: AudioDeviceID) -> Bool {
 /// the block, which must be passed back to `ca_removeDeviceListener` to detach.
 func ca_addDeviceListener(_ id: AudioDeviceID,
                           _ selector: AudioObjectPropertySelector,
+                          scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                           _ handler: @escaping () -> Void) -> AudioObjectPropertyListenerBlock {
     var address = AudioObjectPropertyAddress(
         mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
+        mScope: scope,
         mElement: kAudioObjectPropertyElementMain)
     let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
     AudioObjectAddPropertyListenerBlock(id, &address, DispatchQueue.main, block)
@@ -140,10 +141,58 @@ func ca_addDeviceListener(_ id: AudioDeviceID,
 /// Detaches a listener previously registered with `ca_addDeviceListener`.
 func ca_removeDeviceListener(_ id: AudioDeviceID,
                              _ selector: AudioObjectPropertySelector,
-                             _ block: @escaping AudioObjectPropertyListenerBlock) {
+                             scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+                             block: @escaping AudioObjectPropertyListenerBlock) {
     var address = AudioObjectPropertyAddress(
         mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
+        mScope: scope,
         mElement: kAudioObjectPropertyElementMain)
     AudioObjectRemovePropertyListenerBlock(id, &address, DispatchQueue.main, block)
+}
+
+// MARK: - Output volume
+
+/// Virtual "main" output volume selector — the value the volume keys move,
+/// synthesised by CoreAudio for devices without a real master channel.
+/// FourCC `'vmvc'`; spelled out to stay independent of SDK symbol renames.
+let kVirtualMainVolumeSelector: AudioObjectPropertySelector = 0x766d7663
+
+private func ca_readFloat32(_ id: AudioDeviceID,
+                            _ selector: AudioObjectPropertySelector,
+                            scope: AudioObjectPropertyScope,
+                            element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain) -> Float? {
+    var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+    guard AudioObjectHasProperty(id, &address) else { return nil }
+    var value: Float32 = 0
+    var size = UInt32(MemoryLayout<Float32>.size)
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else { return nil }
+    return value
+}
+
+/// Current output volume in `0...1`, or `nil` if the device exposes no volume
+/// control (some Bluetooth devices manage their own level). Tries the virtual
+/// main volume, then a master `VolumeScalar`, then averages the stereo channels.
+func ca_outputVolume(_ id: AudioDeviceID) -> Float? {
+    if let v = ca_readFloat32(id, kVirtualMainVolumeSelector, scope: kAudioObjectPropertyScopeOutput) { return v }
+    if let v = ca_readFloat32(id, kAudioDevicePropertyVolumeScalar, scope: kAudioObjectPropertyScopeOutput) { return v }
+    var total: Float = 0, n = 0
+    for ch in UInt32(1)...UInt32(2) {
+        if let v = ca_readFloat32(id, kAudioDevicePropertyVolumeScalar, scope: kAudioObjectPropertyScopeOutput, element: ch) {
+            total += v; n += 1
+        }
+    }
+    return n > 0 ? total / Float(n) : nil
+}
+
+/// Whether the output device is muted (best-effort; false if unsupported).
+func ca_outputMuted(_ id: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyMute,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain)
+    guard AudioObjectHasProperty(id, &address) else { return false }
+    var muted: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &muted) == noErr else { return false }
+    return muted != 0
 }
