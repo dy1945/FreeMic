@@ -1,0 +1,13 @@
+# Swift / SwiftPM build artifacts
+.build/
+.swiftpm/
+Package.resolved
+
+# Packaged app bundle (produced by build.sh)
+*.app/
+
+# macOS
+.DS_Store
+
+# oh-my-claudecode internal state
+.omc/
