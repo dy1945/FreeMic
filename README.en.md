@@ -83,3 +83,7 @@ It doesn't identify specific apps (fragile and requires per-app adaptation); it 
 3. It only reverts when the **default input is still a Bluetooth device**, that device is **genuinely idle**, and a **built-in mic exists**.
 
 So it's **conferencing-app-agnostic** — works with any app that grabs the headset mic; the whole path only reads CoreAudio properties, so it likewise **needs no permission**. It's **on by default** and can be toggled off in the panel (persisted in `UserDefaults`, key `autoRevertToBuiltInMic`).
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
