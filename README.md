@@ -76,6 +76,10 @@ FreeMic.app/Contents/MacOS/FreeMic --list
 
 切换默认输入设备使用 CoreAudio 公共 API，不采集音频，因此**无需麦克风权限**。
 
+## 许可协议
+
+本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
+
 ### 自动切回是怎么判断「会议结束」的
 
 不靠识别具体 App（钉钉 / 飞书 / Zoom……那样既脆弱又要逐个适配），而是直接听音频会话状态：
