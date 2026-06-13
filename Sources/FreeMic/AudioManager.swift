@@ -16,6 +16,15 @@ final class AudioManager: ObservableObject {
     @Published var outputName: String = "未知设备"
     @Published var outputIsBluetooth: Bool = false
 
+    /// Current default-output volume in `0...1`, whether it exposes a volume
+    /// control at all, and its mute state — surfaced in the volume HUD.
+    @Published var outputVolume: Double = 0
+    @Published var outputHasVolume: Bool = false
+    @Published var outputMuted: Bool = false
+
+    /// SF Symbol representing the current output, used by the HUD.
+    var outputSymbolName: String { outputIsBluetooth ? "headphones" : "speaker.wave.2.fill" }
+
     /// Available *input* devices and the currently selected one.
     @Published var inputDevices: [Device] = []
     @Published var currentInputID: AudioDeviceID = 0
@@ -33,11 +42,29 @@ final class AudioManager: ObservableObject {
 
     private static let autoRevertKey = "autoRevertToBuiltInMic"
 
+    /// Setting: never let a Bluetooth mic become the input. Stronger than
+    /// auto-revert — it enforces *immediately* (and proactively) rather than
+    /// after the mic is released, so the headset never enters HFP at all.
+    /// Persisted; defaults OFF (opt-in).
+    @Published var lockBuiltInMic: Bool {
+        didSet {
+            UserDefaults.standard.set(lockBuiltInMic, forKey: Self.lockKey)
+            if lockBuiltInMic { enforceLockIfNeeded() }
+        }
+    }
+    private static let lockKey = "lockBuiltInMic"
+
     /// `DeviceIsRunningSomewhere` listeners + last-seen running state, keyed by the
     /// Bluetooth input devices we're currently monitoring.
     private var runningMonitors: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
     private var runningState: [AudioDeviceID: Bool] = [:]
     private var pendingRevert: DispatchWorkItem?
+
+    /// Volume-change listeners bound to the *current* default output device.
+    private var volumeListeners: [(AudioObjectPropertySelector, AudioObjectPropertyScope, AudioObjectPropertyListenerBlock)] = []
+    private var volumeMonitorID: AudioDeviceID = 0
+    /// Created lazily on the first volume change, so launch stays cheap.
+    private lazy var volumeHUD = VolumeHUDController()
 
     init() {
         let defaults = UserDefaults.standard
@@ -45,6 +72,7 @@ final class AudioManager: ObservableObject {
             defaults.set(true, forKey: Self.autoRevertKey)   // default ON
         }
         autoRevertEnabled = defaults.bool(forKey: Self.autoRevertKey)
+        lockBuiltInMic = defaults.bool(forKey: Self.lockKey)   // absent → false
 
         refresh()
         ca_addSystemListener(kAudioHardwarePropertyDevices) { [weak self] in self?.refresh() }
@@ -57,6 +85,8 @@ final class AudioManager: ObservableObject {
         let outID = ca_defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
         outputName = ca_name(outID)
         outputIsBluetooth = isBluetooth(ca_transportType(outID))
+        updateOutputVolumeState(outID)   // silent — no HUD on device refresh
+        reconcileVolumeMonitor(outID)
 
         currentInputID = ca_defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
         inputDevices = ca_allDevices()
@@ -70,6 +100,7 @@ final class AudioManager: ObservableObject {
                     isBluetooth: isBluetooth(t))
             }
         reconcileRunningMonitors()
+        enforceLockIfNeeded()
     }
 
     /// Switches the system default input device. Manual switches clear any
@@ -90,7 +121,7 @@ final class AudioManager: ObservableObject {
         let btInputs = Set(inputDevices.filter { $0.isBluetooth }.map { $0.id })
 
         for (id, block) in runningMonitors where !btInputs.contains(id) {
-            ca_removeDeviceListener(id, kAudioDevicePropertyDeviceIsRunningSomewhere, block)
+            ca_removeDeviceListener(id, kAudioDevicePropertyDeviceIsRunningSomewhere, block: block)
             runningMonitors[id] = nil
             runningState[id] = nil
         }
@@ -144,6 +175,87 @@ final class AudioManager: ObservableObject {
         }
     }
 
+    // MARK: - Volume HUD (Dynamic-Island-style overlay on volume changes)
+
+    /// Reads the current output volume / mute into the published state without
+    /// triggering the HUD (used by `refresh`).
+    private func updateOutputVolumeState(_ outID: AudioDeviceID) {
+        if let v = ca_outputVolume(outID) {
+            outputVolume = Double(v)
+            outputHasVolume = true
+        } else {
+            outputHasVolume = false
+        }
+        outputMuted = ca_outputMuted(outID)
+    }
+
+    /// Binds volume / mute listeners to the current default output device,
+    /// re-binding whenever that device changes.
+    private func reconcileVolumeMonitor(_ outID: AudioDeviceID) {
+        guard outID != volumeMonitorID else { return }
+        for (sel, scope, block) in volumeListeners {
+            ca_removeDeviceListener(volumeMonitorID, sel, scope: scope, block: block)
+        }
+        volumeListeners.removeAll()
+        volumeMonitorID = outID
+        guard outID != 0 else { return }
+
+        let specs: [(AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
+            (kVirtualMainVolumeSelector, kAudioObjectPropertyScopeOutput),
+            (kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput),
+            (kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput),
+        ]
+        for (sel, scope) in specs {
+            let block = ca_addDeviceListener(outID, sel, scope: scope) { [weak self] in
+                self?.handleVolumeChange(outID)
+            }
+            volumeListeners.append((sel, scope, block))
+        }
+    }
+
+    /// Fires on an actual volume / mute change on the current output device —
+    /// updates state and, if the value really moved, shows the HUD.
+    private func handleVolumeChange(_ outID: AudioDeviceID) {
+        guard outID == volumeMonitorID else { return }
+        let newVolume = ca_outputVolume(outID)
+        let newMuted = ca_outputMuted(outID)
+        let volumeMoved = newVolume.map { abs(Double($0) - outputVolume) > 0.0005 } ?? false
+        let changed = volumeMoved || newMuted != outputMuted
+
+        if let v = newVolume {
+            outputVolume = Double(v)
+            outputHasVolume = true
+        }
+        outputMuted = newMuted
+
+        guard changed, outputHasVolume else { return }
+        volumeHUD.show(deviceName: outputName,
+                       volume: outputVolume,
+                       muted: outputMuted,
+                       symbol: outputSymbolName)
+    }
+
+    // MARK: - Lock to built-in mic (never use a Bluetooth mic)
+
+    /// Where lock mode pins the input: the built-in mic, else the first
+    /// non-Bluetooth input (handles Macs without an internal mic).
+    var lockTargetInput: Device? {
+        builtInInput ?? inputDevices.first { !$0.isBluetooth }
+    }
+
+    /// If lock mode is on and the current input is a Bluetooth mic, immediately
+    /// switch back to the lock target. Returns true if it switched.
+    @discardableResult
+    private func enforceLockIfNeeded() -> Bool {
+        guard lockBuiltInMic else { return false }
+        guard let current = inputDevices.first(where: { $0.id == currentInputID }),
+              current.isBluetooth else { return false }
+        guard let target = lockTargetInput, target.id != currentInputID else { return false }
+        selectInput(target.id)
+        flashAutoRevertNotice()
+        return true
+    }
+
     /// The built-in microphone, if present — used by the one-click shortcut.
     var builtInInput: Device? {
         inputDevices.first { $0.isBuiltIn }
@@ -155,9 +267,11 @@ final class AudioManager: ObservableObject {
 
     /// Prints the current state to stdout — used by the `--list` debug flag.
     func printDebug() {
+        print("Lock built-in : \(lockBuiltInMic ? "on" : "off")")
         print("Auto-revert   : \(autoRevertEnabled ? "on" : "off")")
         let outID = ca_defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
-        print("Output device : \(ca_name(outID))  (bluetooth=\(isBluetooth(ca_transportType(outID))))")
+        let vol = ca_outputVolume(outID).map { "\(Int(($0 * 100).rounded()))%" } ?? "n/a"
+        print("Output device : \(ca_name(outID))  (bluetooth=\(isBluetooth(ca_transportType(outID))) volume=\(vol))")
         let inID = ca_defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
         print("Current input : \(ca_name(inID))")
         print("Input devices :")
