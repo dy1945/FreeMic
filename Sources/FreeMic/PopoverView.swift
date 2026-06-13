@@ -31,10 +31,42 @@ struct PopoverView: View {
 
             Divider().padding(.vertical, 12)
 
+            autoRevertSection
+
+            Divider().padding(.vertical, 12)
+
             footer
         }
         .padding(16)
         .frame(width: 300)
+    }
+
+    // MARK: - Auto-revert setting
+
+    private var autoRevertSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: $audio.autoRevertEnabled) {
+                Text("会议结束后自动切回内置麦克风")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+            }
+            .toggleStyle(.switch)
+            .tint(accent)
+            .controlSize(.small)
+
+            if audio.autoRevertNotice {
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(accent)
+                    Text("已自动切回内置麦克风")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: audio.autoRevertNotice)
     }
 
     // MARK: - Header (current output / Bluetooth headphone)

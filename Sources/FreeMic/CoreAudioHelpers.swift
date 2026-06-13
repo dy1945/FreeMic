@@ -108,3 +108,42 @@ func ca_addSystemListener(_ selector: AudioObjectPropertySelector,
         handler()
     }
 }
+
+/// True if *any* process is currently running IO on the device. For a Bluetooth
+/// headset this flips to `true` while its mic is in use (HFP call) and back to
+/// `false` once released — the signal we use to detect "the meeting ended".
+func ca_isRunningSomewhere(_ id: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var running: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &running) == noErr else { return false }
+    return running != 0
+}
+
+/// Registers a main-queue listener on a *specific device's* property and returns
+/// the block, which must be passed back to `ca_removeDeviceListener` to detach.
+func ca_addDeviceListener(_ id: AudioDeviceID,
+                          _ selector: AudioObjectPropertySelector,
+                          _ handler: @escaping () -> Void) -> AudioObjectPropertyListenerBlock {
+    var address = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
+    AudioObjectAddPropertyListenerBlock(id, &address, DispatchQueue.main, block)
+    return block
+}
+
+/// Detaches a listener previously registered with `ca_addDeviceListener`.
+func ca_removeDeviceListener(_ id: AudioDeviceID,
+                             _ selector: AudioObjectPropertySelector,
+                             _ block: @escaping AudioObjectPropertyListenerBlock) {
+    var address = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    AudioObjectRemovePropertyListenerBlock(id, &address, DispatchQueue.main, block)
+}
