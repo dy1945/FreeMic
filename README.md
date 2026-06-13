@@ -76,10 +76,6 @@ FreeMic.app/Contents/MacOS/FreeMic --list
 
 切换默认输入设备使用 CoreAudio 公共 API，不采集音频，因此**无需麦克风权限**。
 
-## 许可协议
-
-本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
-
 ### 自动切回是怎么判断「会议结束」的
 
 不靠识别具体 App（钉钉 / 飞书 / Zoom……那样既脆弱又要逐个适配），而是直接听音频会话状态：
@@ -89,3 +85,7 @@ FreeMic.app/Contents/MacOS/FreeMic --list
 3. 仅当此刻**默认输入仍是蓝牙设备**、它**确已空闲**、且**存在内置麦克风**时，才切回内置麦克风。
 
 因此它**与会议软件无关**，钉钉 / 飞书 / Zoom / 系统电话乃至任何占用耳机麦克风的程序都适用；整条链路只读 CoreAudio 属性，**同样无需任何权限**。该配置**默认开启**，可在面板开关随时关闭（持久化在 `UserDefaults`，键 `autoRevertToBuiltInMic`）。
+
+## 许可协议
+
+本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
