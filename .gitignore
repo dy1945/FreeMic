@@ -9,5 +9,14 @@ Package.resolved
 # macOS
 .DS_Store
 
+# Generated icon artifacts (keep icon_build/MakeIcon.swift + Resources/AppIcon.icns)
+icon_build/AppIcon.iconset/
+icon_build/*.png
+icon_build/*.icns
+icon_build/*.b64.txt
+
 # oh-my-claudecode internal state
 .omc/
+
+# Claude Code machine-local settings
+.claude/settings.local.json

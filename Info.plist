@@ -10,6 +10,8 @@
     <string>com.vibe.freemic</string>
     <key>CFBundleExecutable</key>
     <string>FreeMic</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
