@@ -200,9 +200,16 @@ struct PopoverView: View {
 
             Spacer()
 
-            Text("FreeMic \(appVersion)")
+            Button { showAbout() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "info.circle")
+                    Text("FreeMic \(appVersion)")
+                }
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help(loc.t("关于", "About"))
 
             Spacer()
 
@@ -217,6 +224,23 @@ struct PopoverView: View {
     private var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         return "v\(v)"
+    }
+
+    /// Opens the standard macOS About panel with the app icon, version, and a
+    /// short description (localized).
+    private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        let body = loc.isEnglish
+            ? "Menu-bar microphone / Bluetooth switcher.\nKeeps your headset in high-quality A2DP audio by keeping the mic on the built-in input.\n\nhttps://github.com/dy1945/FreeMic"
+            : "菜单栏麦克风 / 蓝牙耳机切换工具。\n把麦克风留在内置输入，让耳机始终保持 A2DP 高音质。\n\nhttps://github.com/dy1945/FreeMic"
+        let credits = NSAttributedString(string: body, attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: credits,
+            .applicationName: "FreeMic",
+        ])
     }
 
     // MARK: - Helpers
