@@ -86,6 +86,9 @@ FreeMic.app/Contents/MacOS/FreeMic --list
 
 因此它**与会议软件无关**，钉钉 / 飞书 / Zoom / 系统电话乃至任何占用耳机麦克风的程序都适用；整条链路只读 CoreAudio 属性，**同样无需任何权限**。该配置**默认开启**，可在面板开关随时关闭（持久化在 `UserDefaults`，键 `autoRevertToBuiltInMic`）。
 
+## 致谢
+- [LINUX DO](https://linux.do/) - 新的理想型社区
+
 ## 许可协议
 
 本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
