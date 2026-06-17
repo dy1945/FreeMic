@@ -14,6 +14,67 @@ private let menuBarIcon: NSImage = {
     return img
 }()
 
+/// Glyph green when a Bluetooth headphone is the current output.
+private let headphoneGreen = Color(red: 0.22, green: 0.80, blue: 0.40)
+
+/// A small, plain lock overlay (no disc/ring) marking the built-in-mic lock.
+/// Kept subtle on purpose; sits in the bottom-trailing corner of the glyph.
+private func lockOverlay(_ color: Color?) -> some View {
+    Image(systemName: "lock.fill")
+        .font(.system(size: 7, weight: .semibold))
+        .foregroundStyle(color ?? Color.primary)
+        .offset(x: 2, y: 1)
+}
+
+/// Pre-renders the green (Bluetooth-output) glyph as a *non-template* image.
+///
+/// MenuBarExtra flattens its SwiftUI label into a template (monochrome) image,
+/// which would strip the green. So we rasterize the composition ourselves with
+/// `ImageRenderer` and mark the result non-template, so macOS keeps the color.
+@MainActor
+private func greenGlyph(locked: Bool) -> NSImage {
+    let composition = ZStack(alignment: .bottomTrailing) {
+        Image(nsImage: menuBarIcon)
+            .renderingMode(.template)
+            .foregroundStyle(headphoneGreen)
+        if locked { lockOverlay(.white) }
+    }
+    .frame(width: 18, height: 18)
+    .padding(1)
+
+    let renderer = ImageRenderer(content: composition)
+    renderer.scale = 2
+    let img = renderer.nsImage ?? menuBarIcon
+    img.isTemplate = false   // keep the green; do not let macOS monochrome it
+    return img
+}
+
+/// State-aware menu-bar label.
+///  • Bluetooth headphone is the output → green glyph (pre-rendered in color).
+///  • Built-in output → default template glyph that adapts to light/dark.
+///  • Built-in mic locked → a small lock overlay, in either case.
+private struct MenuBarLabel: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        if audio.outputIsBluetooth {
+            // Green needs color, so use the single pre-rendered non-template image.
+            Image(nsImage: audio.lockBuiltInMic ? Self.greenLocked : Self.green)
+        } else {
+            // Default color: a live template label macOS tints to the menu bar.
+            // The lock overlays in the same template, so it stays adaptive too.
+            ZStack(alignment: .bottomTrailing) {
+                Image(nsImage: menuBarIcon)
+                if audio.lockBuiltInMic { lockOverlay(nil) }
+            }
+        }
+    }
+
+    // Rendered once, lazily, on first access (main actor).
+    @MainActor static let green = greenGlyph(locked: false)
+    @MainActor static let greenLocked = greenGlyph(locked: true)
+}
+
 @main
 struct FreeMicApp: App {
     @StateObject private var audio: AudioManager
@@ -32,7 +93,7 @@ struct FreeMicApp: App {
         MenuBarExtra {
             PopoverView(audio: audio)
         } label: {
-            Image(nsImage: menuBarIcon)
+            MenuBarLabel(audio: audio)
         }
         .menuBarExtraStyle(.window)
     }
