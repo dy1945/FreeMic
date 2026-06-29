@@ -22,8 +22,8 @@ final class KeyboardLightEgg {
     /// Shared 4-char signature ('FrMc'); each action gets its own id.
     private let signature = OSType(0x46724D63)
     private static let hkToggle: UInt32 = 1     // ⌃K   → on/off
-    private static let hkBrighten: UInt32 = 2   // ⌃⌥↑  → +1 step
-    private static let hkDim: UInt32 = 3        // ⌃⌥↓  → −1 step
+    private static let hkBrighten: UInt32 = 2   // ⌃⌥=  → +1 step (the "+" key)
+    private static let hkDim: UInt32 = 3        // ⌃⌥-  → −1 step
     /// One brightness step for the brighten / dim hotkeys (20%).
     private let step: Float = 0.2
 
@@ -33,8 +33,10 @@ final class KeyboardLightEgg {
     /// app-wide without Accessibility / Input-Monitoring permission, which keeps
     /// this a zero-friction easter egg.
     ///   ⌃K   toggle on/off
-    ///   ⌃⌥↑  brighten one step
-    ///   ⌃⌥↓  dim one step
+    ///   ⌃⌥=  brighten one step  (the "+" key)
+    ///   ⌃⌥-  dim one step
+    /// (Brightness uses the = / - keys rather than arrows so it doesn't collide
+    ///  with Magnet, which owns the ⌃⌥ + arrow keys.)
     func start() {
         guard handler == nil else { return }
 
@@ -56,9 +58,9 @@ final class KeyboardLightEgg {
 
         let ctrl = UInt32(controlKey)
         let ctrlOpt = UInt32(controlKey | optionKey)
-        register(keyCode: UInt32(kVK_ANSI_K),    modifiers: ctrl,    id: Self.hkToggle)
-        register(keyCode: UInt32(kVK_UpArrow),   modifiers: ctrlOpt, id: Self.hkBrighten)
-        register(keyCode: UInt32(kVK_DownArrow), modifiers: ctrlOpt, id: Self.hkDim)
+        register(keyCode: UInt32(kVK_ANSI_K),     modifiers: ctrl,    id: Self.hkToggle)
+        register(keyCode: UInt32(kVK_ANSI_Equal), modifiers: ctrlOpt, id: Self.hkBrighten)
+        register(keyCode: UInt32(kVK_ANSI_Minus), modifiers: ctrlOpt, id: Self.hkDim)
     }
 
     private func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) {

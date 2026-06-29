@@ -27,7 +27,7 @@ FreeMic's idea is simple: **keep the mic input on the built-in microphone so the
 - 🌐 **中文 / English UI**: follows the system language by default, switchable on the fly via "语言 / Language" in the panel
 - 🔄 **Auto-refresh** when devices are plugged/unplugged or the system switches devices (CoreAudio listeners, no manual refresh needed)
 - 🪶 Lives in the menu bar with no Dock icon (`LSUIElement`); pure system APIs, zero third-party dependencies
-- 🥚 **Easter egg**: global hotkeys to play with the Mac keyboard backlight, with a little pill at the top and no permissions required — `Control + K` toggles on/off, `Control + Option + ↑` brightens and `Control + Option + ↓` dims (20% per step)
+- 🥚 **Easter egg**: global hotkeys to play with the Mac keyboard backlight, with a little pill at the top and no permissions required — `Control + K` toggles on/off, `Control + Option + =` (the "+" key) brightens and `Control + Option + -` dims (20% per step; the =/- keys steer clear of Magnet's ⌃⌥ + arrows)
 
 ## Build & run
 
