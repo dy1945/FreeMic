@@ -87,6 +87,10 @@ struct FreeMicApp: App {
             exit(0)
         }
         _audio = StateObject(wrappedValue: manager)
+
+        // 🥚 Easter egg: arm the global ⌃K → keyboard-backlight toggle. Deferred
+        // to the next runloop tick so the app's Carbon event target is ready.
+        DispatchQueue.main.async { KeyboardLightEgg.shared.start() }
     }
 
     var body: some Scene {

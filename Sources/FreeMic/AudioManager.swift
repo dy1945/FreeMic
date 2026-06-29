@@ -25,6 +25,13 @@ final class AudioManager: ObservableObject {
     /// SF Symbol representing the current output, used by the HUD.
     var outputSymbolName: String { outputIsBluetooth ? "headphones" : "speaker.wave.2.fill" }
 
+    /// Battery level of the current Bluetooth headphone (empty when the output
+    /// isn't Bluetooth or the device reports nothing). Read off the main thread
+    /// and published back on it.
+    @Published var battery = BatteryReading()
+    private let batteryQueue = DispatchQueue(label: "com.vibe.freemic.battery", qos: .utility)
+    private var batteryTimer: Timer?
+
     /// Available *input* devices and the currently selected one.
     @Published var inputDevices: [Device] = []
     @Published var currentInputID: AudioDeviceID = 0
@@ -78,7 +85,14 @@ final class AudioManager: ObservableObject {
         ca_addSystemListener(kAudioHardwarePropertyDevices) { [weak self] in self?.refresh() }
         ca_addSystemListener(kAudioHardwarePropertyDefaultInputDevice) { [weak self] in self?.refresh() }
         ca_addSystemListener(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in self?.refresh() }
+
+        // Battery changes slowly; a light periodic poll keeps the badge fresh.
+        batteryTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.refreshBattery()
+        }
     }
+
+    deinit { batteryTimer?.invalidate() }
 
     /// Re-reads the full audio state from CoreAudio.
     func refresh() {
@@ -101,6 +115,25 @@ final class AudioManager: ObservableObject {
             }
         reconcileRunningMonitors()
         enforceLockIfNeeded()
+        refreshBattery()
+    }
+
+    /// Refreshes the Bluetooth battery reading. Clears it immediately when the
+    /// output isn't Bluetooth; otherwise reads on a background queue (the
+    /// `system_profiler` fallback can block) and publishes back on the main thread.
+    func refreshBattery() {
+        guard outputIsBluetooth else {
+            if !battery.isEmpty { battery = BatteryReading() }
+            return
+        }
+        let name = outputName
+        batteryQueue.async { [weak self] in
+            let reading = bt_readBattery(matching: name)
+            DispatchQueue.main.async {
+                guard let self, self.outputIsBluetooth else { return }
+                if self.battery != reading { self.battery = reading }
+            }
+        }
     }
 
     /// Switches the system default input device. Manual switches clear any
@@ -272,6 +305,22 @@ final class AudioManager: ObservableObject {
         let outID = ca_defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
         let vol = ca_outputVolume(outID).map { "\(Int(($0 * 100).rounded()))%" } ?? "n/a"
         print("Output device : \(ca_name(outID))  (bluetooth=\(isBluetooth(ca_transportType(outID))) volume=\(vol))")
+        if isBluetooth(ca_transportType(outID)) {
+            let b = bt_readBattery(matching: ca_name(outID))
+            let parts = [
+                b.single.map { "main=\($0)%" },
+                b.left.map { "L=\($0)%" },
+                b.right.map { "R=\($0)%" },
+                b.caseLevel.map { "case=\($0)%" },
+            ].compactMap { $0 }
+            let form: String
+            switch b.form {
+            case .earbuds: form = "earbuds(分体)"
+            case .overEar: form = "over-ear(头戴)"
+            case .unknown: form = "unknown"
+            }
+            print("Battery       : \(parts.isEmpty ? "n/a" : parts.joined(separator: " "))  form=\(form)")
+        }
         let inID = ca_defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
         print("Current input : \(ca_name(inID))")
         print("Input devices :")

@@ -140,7 +140,73 @@ struct PopoverView: View {
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            batteryBadge
+        }
+    }
+
+    // MARK: - Battery badge
+
+    /// Compact battery indicator, shown only when a Bluetooth headphone is the
+    /// output and it reports a level — so the header is unchanged otherwise.
+    @ViewBuilder
+    private var batteryBadge: some View {
+        if audio.outputIsBluetooth, let pct = audio.battery.primary {
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: batterySymbol(pct))
+                        .font(.system(size: 13))
+                        .foregroundStyle(batteryColor(pct))
+                    Text("\(pct)%")
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.primary)
+                }
+                if let detail = batteryDetail {
+                    Text(detail)
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .help(loc.t("耳机电量", "Headphone battery"))
+            .transition(.opacity)
+        }
+    }
+
+    /// Caption that disambiguates what the number means:
+    ///  • per-bud / case detail when the device reports it (e.g. "左 90 · 右 85 · 仓 70"),
+    ///  • else the form factor itself ("耳机" / "头戴") so a lone value is never
+    ///    mistaken for the charging case.
+    private var batteryDetail: String? {
+        let b = audio.battery
+        var parts: [String] = []
+        if let l = b.left  { parts.append(loc.t("左", "L") + " \(l)") }
+        if let r = b.right { parts.append(loc.t("右", "R") + " \(r)") }
+        if let c = b.caseLevel { parts.append(loc.t("仓", "Case") + " \(c)") }
+        if !parts.isEmpty { return parts.joined(separator: " · ") }
+        switch b.form {
+        case .earbuds: return loc.t("耳机", "Earbuds")   // single value = the buds, not the case
+        case .overEar: return loc.t("头戴", "Headphones")
+        case .unknown: return nil
+        }
+    }
+
+    /// Tiered SF Symbol battery glyph for the level.
+    private func batterySymbol(_ pct: Int) -> String {
+        switch pct {
+        case ..<13:  return "battery.0"
+        case ..<38:  return "battery.25"
+        case ..<63:  return "battery.50"
+        case ..<88:  return "battery.75"
+        default:     return "battery.100"
+        }
+    }
+
+    /// Green when healthy, amber when low, red when critical.
+    private func batteryColor(_ pct: Int) -> Color {
+        switch pct {
+        case ..<20: return .red
+        case ..<40: return .orange
+        default:    return accent
         }
     }
 
