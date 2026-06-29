@@ -11,8 +11,8 @@ A hidden, just-for-fun easter egg: use global hotkeys to toggle and dial the Mac
 | 快捷键 / Hotkey | 功能 / Action |
 | --- | --- |
 | `Control + K` | 开 / 关键盘背光 · Toggle backlight on/off |
-| `Control + Option + ↑` | 调亮一档（+20%）· Brighten one step (+20%) |
-| `Control + Option + ↓` | 调暗一档（−20%）· Dim one step (−20%) |
+| `Control + Option + =`（+ 键） | 调亮一档（+20%）· Brighten one step (+20%) |
+| `Control + Option + -` | 调暗一档（−20%）· Dim one step (−20%) |
 
 **说明 / Notes**
 
