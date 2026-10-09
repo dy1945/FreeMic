@@ -13,6 +13,22 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
+            if audio.headphoneProfile == .hfp {
+                hfpBanner
+                    .padding(.top, 12)
+                    .transition(.opacity)
+            } else if let note = audio.lastHFPNote {
+                HStack(spacing: 5) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 10))
+                    Text(loc.t("上次占用麦克风：", "Last mic grab: ") + note)
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(.tertiary)
+                .padding(.top, 8)
+                .transition(.opacity)
+            }
+
             Divider().padding(.vertical, 12)
 
             sectionTitle(loc.t("输入设备", "Input Devices"))
@@ -40,6 +56,60 @@ struct PopoverView: View {
         }
         .padding(16)
         .frame(width: 300)
+        .animation(.easeInOut(duration: 0.2), value: audio.headphoneProfile)
+    }
+
+    /// Amber banner shown while the headset is stuck in HFP call mode. It names
+    /// the app only when Bluetooth input IO is active; output-only HFP instead
+    /// explains that playback or system routing triggered the degraded profile.
+    private var hfpBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bannerTitle)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(bannerDetail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+    }
+
+    private var bannerTitle: String {
+        if audio.bluetoothMicIsRunning {
+            if let who = audio.hfpMicUsers.first {
+                return String(
+                    format: loc.t("%@ 正在占用耳机麦克风", "%@ is using the headphone mic"),
+                    who)
+            }
+            return loc.t(
+                "通话模式（HFP）· 蓝牙麦克风正在使用",
+                "Call mode (HFP) · Bluetooth mic is active")
+        }
+        return loc.t(
+            "通话模式（HFP）· 输出已降为电话音质",
+            "Call mode (HFP) · output switched to call quality")
+    }
+
+    private var bannerDetail: String {
+        if audio.bluetoothMicIsRunning {
+            return loc.t(
+                "输出已降为电话音质，占用结束后自动恢复 A2DP",
+                "Output degraded to call quality; A2DP resumes when the mic is released")
+        }
+        return loc.t(
+            "未检测到蓝牙麦克风占用，可能由 App 播放或系统音频路由触发",
+            "No Bluetooth mic use detected; app playback or system audio routing may have triggered it")
     }
 
     // MARK: - Settings
@@ -56,6 +126,9 @@ struct PopoverView: View {
             settingRow(loc.t("会议结束后切回内置麦", "Revert to built-in after calls"),
                        isOn: audio.lockBuiltInMic ? .constant(true) : $audio.autoRevertEnabled,
                        disabled: audio.lockBuiltInMic)
+
+            settingRow(loc.t("音质降级（HFP）时通知我", "Notify when audio degrades (HFP)"),
+                       isOn: $audio.hfpNotifyEnabled)
 
             languageRow
 
@@ -130,11 +203,9 @@ struct PopoverView: View {
                     .lineLimit(1)
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(audio.outputIsBluetooth ? Color.green : Color.secondary.opacity(0.45))
+                        .fill(statusDotColor)
                         .frame(width: 7, height: 7)
-                    Text(audio.outputIsBluetooth
-                         ? loc.t("已连接 · 正在输出", "Connected · Output")
-                         : loc.t("当前输出：", "Output: ") + audio.outputName)
+                    Text(headerStatus)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -143,6 +214,24 @@ struct PopoverView: View {
             Spacer(minLength: 8)
             batteryBadge
         }
+    }
+
+    /// Header status line: the headphone's live A2DP/HFP profile when it's a
+    /// Bluetooth output, else the name of the current non-Bluetooth output.
+    private var headerStatus: String {
+        guard audio.outputIsBluetooth else {
+            return loc.t("当前输出：", "Output: ") + audio.outputName
+        }
+        switch audio.headphoneProfile {
+        case .a2dp: return loc.t("A2DP · 高音质输出", "A2DP · High-quality output")
+        case .hfp: return loc.t("HFP · 通话模式（音质降级）", "HFP · Call mode (degraded)")
+        case .notBluetooth: return loc.t("已连接 · 正在输出", "Connected · Output")
+        }
+    }
+
+    private var statusDotColor: Color {
+        guard audio.outputIsBluetooth else { return Color.secondary.opacity(0.45) }
+        return audio.headphoneProfile == .hfp ? .orange : .green
     }
 
     // MARK: - Battery badge

@@ -1,6 +1,15 @@
 import SwiftUI
 import CoreAudio
 import AudioToolbox
+import UserNotifications
+
+/// Bluetooth output profile, inferred from CoreAudio signals. The headset is
+/// `.hfp` (call mode — degraded, telephony-grade output) while any Bluetooth
+/// mic is running IO or the output's sample rate sits at telephony rates;
+/// otherwise it's `.a2dp` (high-quality stereo).
+enum HeadphoneProfile: Equatable {
+    case notBluetooth, a2dp, hfp
+}
 
 /// Observable model that mirrors the system audio state and drives the UI.
 /// All mutations happen on the main thread (UI calls + main-queue CoreAudio listeners).
@@ -61,6 +70,37 @@ final class AudioManager: ObservableObject {
     }
     private static let lockKey = "lockBuiltInMic"
 
+    /// Current A2DP/HFP profile of the Bluetooth headphone output. Drives the
+    /// menu-bar glyph tint, the header status line, and the HFP banner.
+    @Published var headphoneProfile: HeadphoneProfile = .notBluetooth
+
+    /// Whether a Bluetooth *input* device is actually running IO. HFP can also
+    /// be selected for output-only playback, so the UI must not equate every
+    /// telephony-rate output with microphone use.
+    @Published private(set) var bluetoothMicIsRunning = false
+
+    /// Display names of the apps currently holding a Bluetooth mic (normally
+    /// zero or one). Empty while attribution finds nothing identifiable.
+    @Published var hfpMicUsers: [String] = []
+
+    /// In-memory note about the last HFP episode ("微信 · 14:32"), so you can
+    /// tell afterwards who dragged the headset into call mode. Not persisted.
+    @Published var lastHFPNote: String?
+
+    /// Setting: post a system notification when the headset drops into HFP.
+    /// Persisted; defaults ON, but the permission prompt is deferred until the
+    /// first HFP event actually happens (never at launch).
+    @Published var hfpNotifyEnabled: Bool {
+        didSet { UserDefaults.standard.set(hfpNotifyEnabled, forKey: Self.hfpNotifyKey) }
+    }
+    private static let hfpNotifyKey = "hfpDegradeNotify"
+    private var didRequestNotifyAuth = false
+
+    /// Nominal-sample-rate listener bound to the current output device — fires
+    /// when a Bluetooth headset flips between A2DP (44.1/48kHz) and HFP (8/16kHz).
+    private var profileListener: AudioObjectPropertyListenerBlock?
+    private var profileMonitorID: AudioDeviceID = 0
+
     /// `DeviceIsRunningSomewhere` listeners + last-seen running state, keyed by the
     /// Bluetooth input devices we're currently monitoring.
     private var runningMonitors: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
@@ -80,6 +120,10 @@ final class AudioManager: ObservableObject {
         }
         autoRevertEnabled = defaults.bool(forKey: Self.autoRevertKey)
         lockBuiltInMic = defaults.bool(forKey: Self.lockKey)   // absent → false
+        if defaults.object(forKey: Self.hfpNotifyKey) == nil {
+            defaults.set(true, forKey: Self.hfpNotifyKey)      // default ON
+        }
+        hfpNotifyEnabled = defaults.bool(forKey: Self.hfpNotifyKey)
 
         refresh()
         ca_addSystemListener(kAudioHardwarePropertyDevices) { [weak self] in self?.refresh() }
@@ -114,7 +158,9 @@ final class AudioManager: ObservableObject {
                     isBluetooth: isBluetooth(t))
             }
         reconcileRunningMonitors()
+        reconcileProfileMonitor(outID)
         enforceLockIfNeeded()
+        recomputeProfile()
         refreshBattery()
     }
 
@@ -173,8 +219,147 @@ final class AudioManager: ObservableObject {
         let nowRunning = ca_isRunningSomewhere(id)
         let wasRunning = runningState[id] ?? false
         runningState[id] = nowRunning
+        recomputeProfile()   // keep the A2DP/HFP state + offender banner live
         guard wasRunning, !nowRunning else { return }
         scheduleAutoRevert()
+    }
+
+    // MARK: - A2DP / HFP profile awareness
+
+    /// Telephony-rate ceiling: a Bluetooth output below this is in call mode
+    /// (HFP), not music mode (A2DP). 44.1↔48kHz renegotiation stays above it.
+    private static let hfpSampleRateCeiling: Double = 32_000
+
+    /// Recomputes the profile from two independent live signals:
+    ///  1. any Bluetooth *input* running IO — a mic grab forces HFP immediately,
+    ///  2. the Bluetooth *output* sitting at a telephony sample rate.
+    /// Either alone is sufficient, so brief windows where one signal lags the
+    /// other are still covered.
+    private func recomputeProfile() {
+        guard outputIsBluetooth else {
+            updateBluetoothMicActivity(false)
+            applyProfile(.notBluetooth)
+            return
+        }
+        let outID = ca_defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
+        let rate = ca_nominalSampleRate(outID)
+        let telephonyRate = rate > 0 && rate < Self.hfpSampleRateCeiling
+        let micBusy = inputDevices.contains { $0.isBluetooth && runningState[$0.id] == true }
+        updateBluetoothMicActivity(micBusy)
+        applyProfile((telephonyRate || micBusy) ? .hfp : .a2dp)
+    }
+
+    /// Keeps the microphone-specific state separate from the output profile.
+    /// In particular, an output-only app can negotiate a 16kHz HFP route while
+    /// every input stream remains idle.
+    private func updateBluetoothMicActivity(_ isRunning: Bool) {
+        guard isRunning != bluetoothMicIsRunning else { return }
+        bluetoothMicIsRunning = isRunning
+
+        if isRunning {
+            updateHFPMicUsers()
+            // Process-object attribution can appear shortly after the device's
+            // running flag, so retry once while the mic is still genuinely busy.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self, self.bluetoothMicIsRunning, self.hfpMicUsers.isEmpty else { return }
+                self.updateHFPMicUsers()
+            }
+        } else {
+            rememberCurrentHFPMicUsers()
+            hfpMicUsers = []
+        }
+    }
+
+    /// Publishes a profile change and runs its side effects: the "last grab"
+    /// note on leaving HFP and the degradation notification (only on a live
+    /// A2DP → HFP flip — not for the state discovered at launch). Microphone
+    /// attribution follows its own activity signal above.
+    private func applyProfile(_ new: HeadphoneProfile) {
+        let old = headphoneProfile
+        guard new != old else { return }
+        headphoneProfile = new
+
+        if new == .hfp {
+            if old == .a2dp { notifyHFPDegraded() }
+        } else if old == .hfp {
+            rememberCurrentHFPMicUsers()
+            hfpMicUsers = []
+        }
+    }
+
+    private func rememberCurrentHFPMicUsers() {
+        guard !hfpMicUsers.isEmpty else { return }
+        let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short)
+        lastHFPNote = hfpMicUsers.joined(separator: "、") + " · " + time
+    }
+
+    /// Fills `hfpMicUsers` with the names of processes running input on any
+    /// Bluetooth mic right now. Empty when nothing identifiable shows up
+    /// (e.g. the grabber is a faceless system daemon).
+    private func updateHFPMicUsers() {
+        let busyBTInputs = inputDevices.filter {
+            $0.isBluetooth && (runningState[$0.id] ?? ca_isRunningSomewhere($0.id))
+        }
+        var names: [String] = []
+        for dev in busyBTInputs {
+            for user in audioProcessesRunningInput(on: dev.id) where !names.contains(user.name) {
+                names.append(user.name)
+            }
+        }
+        hfpMicUsers = names
+    }
+
+    /// Binds the sample-rate listener to the current output device, re-binding
+    /// whenever that device changes.
+    private func reconcileProfileMonitor(_ outID: AudioDeviceID) {
+        guard outID != profileMonitorID else { return }
+        if let block = profileListener {
+            ca_removeDeviceListener(profileMonitorID, kAudioDevicePropertyNominalSampleRate, block: block)
+            profileListener = nil
+        }
+        profileMonitorID = outID
+        guard outID != 0 else { return }
+        profileListener = ca_addDeviceListener(outID, kAudioDevicePropertyNominalSampleRate) { [weak self] in
+            self?.recomputeProfile()
+        }
+    }
+
+    /// Posts the "dropped into HFP" notification, requesting permission lazily
+    /// on the very first event. No-op when the setting is off or when running
+    /// unbundled (a bare SPM debug binary has no notification identity).
+    private func notifyHFPDegraded() {
+        guard hfpNotifyEnabled else { return }
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        let micWasRunning = bluetoothMicIsRunning
+        let micUser = hfpMicUsers.first
+        let deliver = {
+            let loc = Localization.shared
+            let content = UNMutableNotificationContent()
+            content.title = "FreeMic · " + loc.t("音质已降级（HFP）", "Audio degraded (HFP)")
+            if micWasRunning {
+                let who = micUser ?? loc.t("某个 App", "An app")
+                content.body = String(
+                    format: loc.t("%@ 正在占用耳机麦克风", "%@ is using the headphone mic"),
+                    who)
+            } else {
+                content.body = loc.t(
+                    "蓝牙输出已切换到电话音质模式，未检测到麦克风占用",
+                    "Bluetooth output switched to call quality; no mic use detected")
+            }
+            content.sound = nil   // silent — the user is likely on a call already
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
+        if didRequestNotifyAuth {
+            center.getNotificationSettings { settings in
+                if settings.authorizationStatus == .authorized { deliver() }
+            }
+        } else {
+            didRequestNotifyAuth = true
+            center.requestAuthorization(options: [.alert]) { granted, _ in
+                if granted { deliver() }
+            }
+        }
     }
 
     /// Debounce: Bluetooth HFP→A2DP teardown is jittery, and apps briefly drop
@@ -306,6 +491,18 @@ final class AudioManager: ObservableObject {
         let vol = ca_outputVolume(outID).map { "\(Int(($0 * 100).rounded()))%" } ?? "n/a"
         print("Output device : \(ca_name(outID))  (bluetooth=\(isBluetooth(ca_transportType(outID))) volume=\(vol))")
         if isBluetooth(ca_transportType(outID)) {
+            let rate = ca_nominalSampleRate(outID)
+            let rateStr = rate > 0 ? "\(Int(rate)) Hz" : "n/a"
+            let desc: String
+            switch headphoneProfile {
+            case .a2dp: desc = "A2DP（高音质）"
+            case .hfp: desc = "HFP（通话模式 · 音质降级）"
+            case .notBluetooth: desc = "n/a"
+            }
+            print("Profile       : \(desc)  (output rate \(rateStr))")
+            if !hfpMicUsers.isEmpty {
+                print("Mic holders   : \(hfpMicUsers.joined(separator: ", "))")
+            }
             let b = bt_readBattery(matching: ca_name(outID))
             let parts = [
                 b.single.map { "main=\($0)%" },
@@ -324,10 +521,30 @@ final class AudioManager: ObservableObject {
         let inID = ca_defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
         print("Current input : \(ca_name(inID))")
         print("Input devices :")
+        var hijackers: [String] = []
         for d in ca_allDevices() where ca_hasInput(d) {
             let t = ca_transportType(d)
             let mark = d == inID ? "✔︎" : " "
-            print("  \(mark) \(ca_name(d))  (builtin=\(t == kAudioDeviceTransportTypeBuiltIn) bt=\(isBluetooth(t)))")
+            let bt = isBluetooth(t)
+            let running = ca_isRunningSomewhere(d)
+            print("  \(mark) \(ca_name(d))  (builtin=\(t == kAudioDeviceTransportTypeBuiltIn) bt=\(bt) running=\(running))")
+            // The smoking gun: a Bluetooth mic that's *running* while NOT the system
+            // default input means some app opened it directly. That alone forces the
+            // headset into HFP (low-quality output) — and the built-in-mic lock, which
+            // only governs the *default* input, can't prevent it. Name the process.
+            if bt, running, d != inID {
+                let users = audioProcessesRunningInput(on: d)
+                let who = users.isEmpty
+                    ? "未识别进程"
+                    : users.map { "\($0.name) (pid \($0.pid))" }.joined(separator: ", ")
+                hijackers.append("\(ca_name(d)) ← \(who)")
+            }
+        }
+        if !hijackers.isEmpty {
+            print("⚠️  HFP suspect : \(hijackers.joined(separator: "; "))")
+            print("                蓝牙麦正被占用但不是默认输入 —— 某个 App 直接打开了它，")
+            print("                强制耳机进入 HFP、压低输出音量。锁「默认输入」拦不住它。")
+            print("                把该 App 的麦克风改成内置麦，或等它结束占用。")
         }
     }
 }

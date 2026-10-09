@@ -99,9 +99,10 @@ final class KeyboardLightEgg {
 final class KeyboardBacklight {
     private let client: AnyObject?
     private let keyboardID: UInt64 = 1
-    /// Remembers the last non-zero level so toggling back on restores it,
-    /// rather than always snapping to full brightness.
-    private var lastOnLevel: Float = 1.0
+    /// Level used when toggling on: the system's lowest F-key step (1/16),
+    /// so ⌃K never blasts the backlight — brighten with ⌃⌥= if needed.
+    /// (Must stay above the 0.01 on/off threshold in `toggle`.)
+    private let minOnLevel: Float = 1.0 / 16.0
 
     init() {
         _ = dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness",
@@ -119,30 +120,27 @@ final class KeyboardBacklight {
     }
 
     /// Toggles the backlight, returning the resulting brightness in `0...1`.
+    /// Turning on always lands on `minOnLevel`, never a remembered level.
     @discardableResult
     func toggle() -> Float {
         guard let proxy else { return 0 }
         let current = proxy.brightnessForKeyboard(keyboardID)
         if current > 0.01 {
-            lastOnLevel = current
             _ = proxy.setBrightness(0, forKeyboard: keyboardID)
             return 0
         } else {
-            let target = lastOnLevel > 0.01 ? lastOnLevel : 1.0
-            _ = proxy.setBrightness(target, forKeyboard: keyboardID)
-            return target
+            _ = proxy.setBrightness(minOnLevel, forKeyboard: keyboardID)
+            return minOnLevel
         }
     }
 
     /// Nudges the backlight by `delta` (negative dims), clamped to `0...1`, and
-    /// returns the resulting brightness. Remembers the latest non-zero level so
-    /// the on/off toggle restores it.
+    /// returns the resulting brightness.
     @discardableResult
     func step(by delta: Float) -> Float {
         guard let proxy else { return 0 }
         let target = max(0, min(1, proxy.brightnessForKeyboard(keyboardID) + delta))
         _ = proxy.setBrightness(target, forKeyboard: keyboardID)
-        if target > 0.01 { lastOnLevel = target }
         return target
     }
 }

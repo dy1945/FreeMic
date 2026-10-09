@@ -123,6 +123,20 @@ func ca_isRunningSomewhere(_ id: AudioDeviceID) -> Bool {
     return running != 0
 }
 
+/// Nominal sample rate of the device (e.g. 44100). A Bluetooth *output* drops
+/// to telephony rates (8k/16kHz) while the headset is in HFP call mode, so this
+/// doubles as an A2DP ↔ HFP tell. Returns -1 on failure.
+func ca_nominalSampleRate(_ id: AudioDeviceID) -> Double {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var rate: Float64 = 0
+    var size = UInt32(MemoryLayout<Float64>.size)
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &rate) == noErr else { return -1 }
+    return rate
+}
+
 /// Registers a main-queue listener on a *specific device's* property and returns
 /// the block, which must be passed back to `ca_removeDeviceListener` to detach.
 func ca_addDeviceListener(_ id: AudioDeviceID,
